@@ -12,6 +12,8 @@ import { getDiscordActivitiesRuntime } from "./runtime.js";
 
 const REGISTRATION_WIDGET_ID = "AAAAAAAAAAAAAAAAAAAAAA";
 
+const PENDING_LAUNCH_WRITE_BUDGET_MS = 250;
+
 class DiscordActivityButton extends Button {
   label = "Open widget";
   customId = buildDiscordActivityCustomId(REGISTRATION_WIDGET_ID);
@@ -67,9 +69,11 @@ class DiscordActivityButton extends Button {
     if (!runtime || !channelId || !discordUserId) {
       this.logPendingLaunchFailure(new Error("missing activity runtime or interaction identity"));
     } else {
-      // The write lands in milliseconds while the Activity shell boots and fetches api/widget.
-      // It wins the practical race without ever blocking Discord's interaction acknowledgement.
-      void runtime.store
+      // Await the write within a small budget so the record is visible before the Activity
+      // can query api/widget, while never risking Discord's 3-second interaction ack: a
+      // healthy store commits in single-digit milliseconds; on timeout the write continues
+      // in the background and the mangled-ID multi-widget case degrades to fail-closed.
+      const write = runtime.store
         .recordPendingLaunch({
           accountId: this.ctx.accountId,
           channelId,
@@ -77,7 +81,20 @@ class DiscordActivityButton extends Button {
           widgetId: data.widgetId,
           createdAt: Date.now(),
         })
-        .catch((error: unknown) => this.logPendingLaunchFailure(error));
+        .then(() => "written" as const)
+        .catch((error: unknown) => {
+          this.logPendingLaunchFailure(error);
+          return "failed" as const;
+        });
+      const timeout = new Promise<"timeout">((resolve) => {
+        const timer = setTimeout(() => resolve("timeout"), PENDING_LAUNCH_WRITE_BUDGET_MS);
+        timer.unref?.();
+      });
+      if ((await Promise.race([write, timeout])) === "timeout") {
+        this.logPendingLaunchFailure(
+          new Error(`pending launch write exceeded ${PENDING_LAUNCH_WRITE_BUDGET_MS}ms`),
+        );
+      }
     }
     await interaction.launchActivity();
   }

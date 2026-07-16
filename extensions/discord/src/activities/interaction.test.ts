@@ -110,13 +110,10 @@ describe("Discord Activity interaction", () => {
     );
   });
 
-  it("does not delay the launch callback for a pending store write", async () => {
+  it("records the pending launch before acknowledging the interaction", async () => {
     const runtime = createActivityTestRuntime();
     setDiscordActivitiesRuntime(runtime);
-    const pendingWrite = createDeferred<void>();
-    const recordPendingLaunch = vi
-      .spyOn(runtime.store, "recordPendingLaunch")
-      .mockReturnValue(pendingWrite.promise);
+    const recordPendingLaunch = vi.spyOn(runtime.store, "recordPendingLaunch");
     const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
       authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
       reply: vi.fn(async () => undefined) as never,
@@ -130,20 +127,8 @@ describe("Discord Activity interaction", () => {
       rawData: { channel_id: "777" },
       userId: "42",
     } as unknown as ButtonInteraction;
-    let runCompleted = false;
-    const run = button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" }).then(() => {
-      runCompleted = true;
-    });
+    await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
 
-    try {
-      await vi.waitFor(() => {
-        expect(launchActivity).toHaveBeenCalledOnce();
-        expect(runCompleted).toBe(true);
-      });
-    } finally {
-      pendingWrite.resolve();
-    }
-    await run;
     expect(recordPendingLaunch).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
@@ -151,6 +136,41 @@ describe("Discord Activity interaction", () => {
         discordUserId: "42",
       }),
     );
+    expect(launchActivity).toHaveBeenCalledOnce();
+    // The bounded await establishes visibility before the Activity can query api/widget.
+    const writeOrder = recordPendingLaunch.mock.invocationCallOrder[0] ?? Number.NaN;
+    const launchOrder = launchActivity.mock.invocationCallOrder[0] ?? Number.NaN;
+    expect(writeOrder).toBeLessThan(launchOrder);
+  });
+
+  it("launches after the write budget when the store stalls and logs once", async () => {
+    const runtime = createActivityTestRuntime();
+    setDiscordActivitiesRuntime(runtime);
+    const pendingWrite = createDeferred<void>();
+    vi.spyOn(runtime.store, "recordPendingLaunch").mockReturnValue(pendingWrite.promise);
+    const logError = vi.fn();
+    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
+      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
+      reply: vi.fn(async () => undefined) as never,
+      logError,
+    });
+    if (!button) {
+      throw new Error("expected activity button");
+    }
+    const launchActivity = vi.fn(async () => undefined);
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
+    try {
+      await button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+      expect(launchActivity).toHaveBeenCalledOnce();
+      expect(logError).toHaveBeenCalledTimes(1);
+      expect(String(logError.mock.calls[0]?.[0])).toContain("exceeded");
+    } finally {
+      pendingWrite.resolve();
+    }
   });
 
   it("still launches when recording the pending launch fails and logs once", async () => {
