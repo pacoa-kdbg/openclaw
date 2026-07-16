@@ -52,7 +52,10 @@ describe("Discord Activity interaction", () => {
       createInternalComponentInteractionPayload({
         id: "interaction-1",
         token: "itoken",
-        data: { component_type: ComponentType.Button, custom_id: "ocactivity:v=1;wid=x" },
+        data: {
+          component_type: ComponentType.Button,
+          custom_id: "ocactivity1_AAAAAAAAAAAAAAAAAAAAAA",
+        },
       }),
     ) as ButtonInteraction;
 
@@ -73,7 +76,11 @@ describe("Discord Activity interaction", () => {
       reply: reply as never,
     });
     const launchActivity = vi.fn(async () => undefined);
-    const interaction = { launchActivity } as unknown as ButtonInteraction;
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
     const rendered = buildDiscordPresentationComponents({
       blocks: [
         {
@@ -97,6 +104,36 @@ describe("Discord Activity interaction", () => {
     expect(authorize).toHaveBeenCalledOnce();
     expect(launchActivity).toHaveBeenCalledOnce();
     expect(reply).not.toHaveBeenCalled();
+    await expect(runtime.store.consumePendingLaunch("777", "42")).resolves.toMatchObject({
+      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+    });
+  });
+
+  it("still launches when recording the pending launch fails and logs once", async () => {
+    const runtime = createActivityTestRuntime();
+    setDiscordActivitiesRuntime(runtime);
+    const recordPendingLaunch = vi
+      .spyOn(runtime.store, "recordPendingLaunch")
+      .mockRejectedValue(new Error("store offline"));
+    const logError = vi.fn();
+    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
+      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
+      reply: vi.fn(async () => undefined) as never,
+      logError,
+    });
+    const launchActivity = vi.fn(async () => undefined);
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
+
+    await button?.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+    await button?.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+
+    expect(recordPendingLaunch).toHaveBeenCalledTimes(2);
+    expect(launchActivity).toHaveBeenCalledTimes(2);
+    expect(logError).toHaveBeenCalledOnce();
   });
 
   it("replies ephemerally and does not launch when unauthorized", async () => {

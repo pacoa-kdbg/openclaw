@@ -5,6 +5,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const WIDGET_TTL_MS = 7 * DAY_MS;
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const DOC_TOKEN_TTL_MS = 60 * 1000;
+const PENDING_LAUNCH_TTL_MS = 2 * 60 * 1000;
 
 type DiscordActivityWidget = {
   html: string;
@@ -24,10 +25,16 @@ type DiscordActivityDocToken = {
   accountId: string;
 };
 
+type DiscordActivityPendingLaunch = {
+  widgetId: string;
+  createdAt: number;
+};
+
 type DiscordActivityStores = {
   widgets: PluginStateKeyedStore<DiscordActivityWidget>;
   sessions: PluginStateKeyedStore<DiscordActivitySession>;
   docTokens: PluginStateKeyedStore<DiscordActivityDocToken>;
+  launches: PluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
 type OpenKeyedStore = <T>(options: {
@@ -57,7 +64,17 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
       overflowPolicy: "evict-oldest",
       defaultTtlMs: DOC_TOKEN_TTL_MS,
     }),
+    launches: openKeyedStore<DiscordActivityPendingLaunch>({
+      namespace: "activities-launches",
+      maxEntries: 256,
+      overflowPolicy: "evict-oldest",
+      defaultTtlMs: PENDING_LAUNCH_TTL_MS,
+    }),
   };
+}
+
+function pendingLaunchKey(channelId: string, discordUserId: string): string {
+  return `${channelId}:${discordUserId}`;
 }
 
 export class DiscordActivityStore {
@@ -120,5 +137,24 @@ export class DiscordActivityStore {
 
   async consumeDocToken(token: string): Promise<DiscordActivityDocToken | undefined> {
     return await this.stores.docTokens.consume(token);
+  }
+
+  async recordPendingLaunch(params: {
+    channelId: string;
+    discordUserId: string;
+    widgetId: string;
+    createdAt: number;
+  }): Promise<void> {
+    await this.stores.launches.register(pendingLaunchKey(params.channelId, params.discordUserId), {
+      widgetId: params.widgetId,
+      createdAt: params.createdAt,
+    });
+  }
+
+  async consumePendingLaunch(
+    channelId: string,
+    discordUserId: string,
+  ): Promise<DiscordActivityPendingLaunch | undefined> {
+    return await this.stores.launches.consume(pendingLaunchKey(channelId, discordUserId));
   }
 }

@@ -13,6 +13,9 @@ type DiscordActivitySession = NonNullable<
 type DiscordActivityDocToken = NonNullable<
   Awaited<ReturnType<DiscordActivityStore["consumeDocToken"]>>
 >;
+type DiscordActivityPendingLaunch = NonNullable<
+  Awaited<ReturnType<DiscordActivityStore["consumePendingLaunch"]>>
+>;
 type DiscordActivityStores = ConstructorParameters<typeof DiscordActivityStore>[0];
 
 export function createMemoryKeyedStore<T>(): PluginStateKeyedStore<T> {
@@ -61,6 +64,7 @@ export function createMemoryActivityStore(): DiscordActivityStore {
     widgets: createMemoryKeyedStore<DiscordActivityWidget>(),
     sessions: createMemoryKeyedStore<DiscordActivitySession>(),
     docTokens: createMemoryKeyedStore<DiscordActivityDocToken>(),
+    launches: createMemoryKeyedStore<DiscordActivityPendingLaunch>(),
   };
   return new DiscordActivityStore(stores);
 }

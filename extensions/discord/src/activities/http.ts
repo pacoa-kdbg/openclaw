@@ -270,7 +270,8 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     let resolved: {
       id: string;
       widget: NonNullable<Awaited<ReturnType<typeof deps.runtime.store.lookupWidget>>>;
-    } | null;
+    } | null = null;
+    // Prefer an explicit ID, then the click-time launch record, then the fail-closed single-widget fallback.
     const requestedWidgetId = widgetIdFromCustomId(customId);
     if (requestedWidgetId) {
       const widget = await deps.runtime.store.lookupWidget(requestedWidgetId);
@@ -279,7 +280,17 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       }
       resolved = { id: requestedWidgetId, widget };
     } else {
-      resolved = await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
+      const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
+        channelId,
+        session.discordUserId,
+      );
+      if (pendingLaunch) {
+        const widget = await deps.runtime.store.lookupWidget(pendingLaunch.widgetId);
+        if (widget?.accountId === session.accountId && widget.channelId === channelId) {
+          resolved = { id: pendingLaunch.widgetId, widget };
+        }
+      }
+      resolved ??= await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
     }
     if (!resolved) {
       return respondJson(res, 404, { error: "widget not found" });
