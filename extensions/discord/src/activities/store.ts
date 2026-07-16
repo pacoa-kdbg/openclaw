@@ -160,6 +160,22 @@ export class DiscordActivityStore {
     );
   }
 
+  async retirePendingLaunch(
+    accountId: string,
+    channelId: string,
+    discordUserId: string,
+    widgetId: string,
+  ): Promise<void> {
+    // Close the launch lifecycle when custom_id resolution succeeds so a completed
+    // launch cannot poison the next click on a different widget for the whole TTL.
+    // Different-widget and ambiguous records stay: their Activities may still query.
+    const key = pendingLaunchKey(accountId, channelId, discordUserId);
+    const existing = await this.stores.launches.lookup(key);
+    if (existing?.state === "single" && existing.widgetId === widgetId) {
+      await this.stores.launches.delete(key);
+    }
+  }
+
   async consumePendingLaunch(
     accountId: string,
     channelId: string,

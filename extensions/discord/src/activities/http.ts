@@ -291,6 +291,16 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         return respondJson(res, 404, { error: "widget not found" });
       }
       resolved = { id: requestedWidgetId, widget };
+      try {
+        await deps.runtime.store.retirePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+          requestedWidgetId,
+        );
+      } catch (error) {
+        logPendingLaunchFailure(error);
+      }
     } else {
       try {
         const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
