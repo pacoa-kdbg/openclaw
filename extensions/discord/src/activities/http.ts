@@ -291,6 +291,8 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         return respondJson(res, 404, { error: "widget not found" });
       }
       resolved = { id: requestedWidgetId, widget };
+      // Awaited like every sibling store call on this path (sessions, widgets): the local
+      // KV either answers or the process is wedged; per-call budgets here would be asymmetric.
       try {
         await deps.runtime.store.retirePendingLaunch(
           session.accountId,
