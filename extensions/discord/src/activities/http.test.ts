@@ -536,6 +536,46 @@ describe("Discord Activity widget routes", () => {
     },
   );
 
+  it("fails closed when overlapping launches target different widgets", async () => {
+    const runtime = createActivityTestRuntime();
+    const firstId = await createWidget(runtime, { createdAt: 1 });
+    const secondId = await createWidget(runtime, { createdAt: 2 });
+    const record = (widgetId: string, createdAt: number) =>
+      runtime.store.recordPendingLaunch({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+        widgetId,
+        createdAt,
+      });
+    await record(firstId, 3);
+    await record(secondId, 4);
+
+    // Ambiguous slot resolves nothing; the multi-widget channel then fails closed.
+    await expect(
+      runtime.store.consumePendingLaunch("default", "777", "42"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps a pending launch when the same widget is clicked twice", async () => {
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime, { createdAt: 1 });
+    const record = (createdAt: number) =>
+      runtime.store.recordPendingLaunch({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+        widgetId,
+        createdAt,
+      });
+    await record(2);
+    await record(3);
+
+    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+      { widgetId },
+    );
+  });
+
   it("consumes a pending launch after one widget resolution", async () => {
     const runtime = createActivityTestRuntime();
     const pendingId = await createWidget(runtime, { createdAt: 1 });

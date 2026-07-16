@@ -25,10 +25,9 @@ type DiscordActivityDocToken = {
   accountId: string;
 };
 
-type DiscordActivityPendingLaunch = {
-  widgetId: string;
-  createdAt: number;
-};
+type DiscordActivityPendingLaunch =
+  | { state: "single"; widgetId: string; createdAt: number }
+  | { state: "ambiguous"; createdAt: number };
 
 type DiscordActivityStores = {
   widgets: PluginStateKeyedStore<DiscordActivityWidget>;
@@ -146,12 +145,18 @@ export class DiscordActivityStore {
     widgetId: string;
     createdAt: number;
   }): Promise<void> {
+    const key = pendingLaunchKey(params.accountId, params.channelId, params.discordUserId);
+    // Overlapping clicks on different widgets are ambiguous: which Activity queries first is
+    // unordered, so a single slot could hand widget B's record to widget A's shell. Poison the
+    // slot instead; consume then fails closed and both launches fall to the single-widget rung.
+    const existing = await this.stores.launches.lookup(key);
+    const overlapsDifferentWidget =
+      existing && (existing.state === "ambiguous" || existing.widgetId !== params.widgetId);
     await this.stores.launches.register(
-      pendingLaunchKey(params.accountId, params.channelId, params.discordUserId),
-      {
-        widgetId: params.widgetId,
-        createdAt: params.createdAt,
-      },
+      key,
+      overlapsDifferentWidget
+        ? { state: "ambiguous", createdAt: params.createdAt }
+        : { state: "single", widgetId: params.widgetId, createdAt: params.createdAt },
     );
   }
 
@@ -159,9 +164,10 @@ export class DiscordActivityStore {
     accountId: string,
     channelId: string,
     discordUserId: string,
-  ): Promise<DiscordActivityPendingLaunch | undefined> {
-    return await this.stores.launches.consume(
+  ): Promise<Extract<DiscordActivityPendingLaunch, { state: "single" }> | undefined> {
+    const launch = await this.stores.launches.consume(
       pendingLaunchKey(accountId, channelId, discordUserId),
     );
+    return launch?.state === "single" ? launch : undefined;
   }
 }
