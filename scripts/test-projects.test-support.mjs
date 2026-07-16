@@ -1986,6 +1986,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs",
+    ["test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts"],
+  ],
+  [
     "scripts/e2e/lib/openai-chat-tools/client.mjs",
     ["test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts"],
   ],
