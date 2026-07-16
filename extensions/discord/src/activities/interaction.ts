@@ -30,6 +30,14 @@ class DiscordActivityButton extends Button {
 
   private pendingLaunchFailureLogged = false;
 
+  private logPendingLaunchFailure(error: unknown): void {
+    if (this.pendingLaunchFailureLogged) {
+      return;
+    }
+    this.pendingLaunchFailureLogged = true;
+    this.deps.logError(`discord activity: failed to record pending launch: ${String(error)}`);
+  }
+
   override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     if (typeof data.widgetId !== "string") {
       await this.deps.reply(interaction, {
@@ -56,21 +64,20 @@ class DiscordActivityButton extends Button {
     const runtime = getDiscordActivitiesRuntime();
     const channelId = interaction.rawData.channel_id;
     const discordUserId = interaction.userId;
-    try {
-      if (!runtime || !channelId || !discordUserId) {
-        throw new Error("missing activity runtime or interaction identity");
-      }
-      await runtime.store.recordPendingLaunch({
-        channelId,
-        discordUserId,
-        widgetId: data.widgetId,
-        createdAt: Date.now(),
-      });
-    } catch (error) {
-      if (!this.pendingLaunchFailureLogged) {
-        this.pendingLaunchFailureLogged = true;
-        this.deps.logError(`discord activity: failed to record pending launch: ${String(error)}`);
-      }
+    if (!runtime || !channelId || !discordUserId) {
+      this.logPendingLaunchFailure(new Error("missing activity runtime or interaction identity"));
+    } else {
+      // The write lands in milliseconds while the Activity shell boots and fetches api/widget.
+      // It wins the practical race without ever blocking Discord's interaction acknowledgement.
+      void runtime.store
+        .recordPendingLaunch({
+          accountId: this.ctx.accountId,
+          channelId,
+          discordUserId,
+          widgetId: data.widgetId,
+          createdAt: Date.now(),
+        })
+        .catch((error: unknown) => this.logPendingLaunchFailure(error));
     }
     await interaction.launchActivity();
   }

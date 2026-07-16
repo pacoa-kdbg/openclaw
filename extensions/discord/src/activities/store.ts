@@ -73,8 +73,8 @@ export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): Disco
   };
 }
 
-function pendingLaunchKey(channelId: string, discordUserId: string): string {
-  return `${channelId}:${discordUserId}`;
+function pendingLaunchKey(accountId: string, channelId: string, discordUserId: string): string {
+  return `${accountId}:${channelId}:${discordUserId}`;
 }
 
 export class DiscordActivityStore {
@@ -140,21 +140,28 @@ export class DiscordActivityStore {
   }
 
   async recordPendingLaunch(params: {
+    accountId: string;
     channelId: string;
     discordUserId: string;
     widgetId: string;
     createdAt: number;
   }): Promise<void> {
-    await this.stores.launches.register(pendingLaunchKey(params.channelId, params.discordUserId), {
-      widgetId: params.widgetId,
-      createdAt: params.createdAt,
-    });
+    await this.stores.launches.register(
+      pendingLaunchKey(params.accountId, params.channelId, params.discordUserId),
+      {
+        widgetId: params.widgetId,
+        createdAt: params.createdAt,
+      },
+    );
   }
 
   async consumePendingLaunch(
+    accountId: string,
     channelId: string,
     discordUserId: string,
   ): Promise<DiscordActivityPendingLaunch | undefined> {
-    return await this.stores.launches.consume(pendingLaunchKey(channelId, discordUserId));
+    return await this.stores.launches.consume(
+      pendingLaunchKey(accountId, channelId, discordUserId),
+    );
   }
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import { resolveActivityUserAuthorized } from "./allowlist.js";
@@ -38,6 +39,7 @@ type DiscordActivityHttpDeps = {
   fetchGuard?: FetchGuard;
   now?: () => number;
   readVendorAsset?: (assetPath: string) => Promise<Buffer>;
+  logError?: (message: string) => void;
 };
 
 type DiscordOauthUser = {
@@ -144,7 +146,17 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
   const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
   const limiter = new TokenRateLimiter(deps.now ?? Date.now);
   const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
+  const reportError = deps.logError ?? logError;
   let vendorAsset: Promise<Buffer> | undefined;
+  let pendingLaunchFailureLogged = false;
+
+  function logPendingLaunchFailure(error: unknown): void {
+    if (pendingLaunchFailureLogged) {
+      return;
+    }
+    pendingLaunchFailureLogged = true;
+    reportError(`discord activity: failed to consume pending launch: ${String(error)}`);
+  }
 
   async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<true> {
     const cfg = deps.runtime.currentConfig();
@@ -280,15 +292,20 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       }
       resolved = { id: requestedWidgetId, widget };
     } else {
-      const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
-        channelId,
-        session.discordUserId,
-      );
-      if (pendingLaunch) {
-        const widget = await deps.runtime.store.lookupWidget(pendingLaunch.widgetId);
-        if (widget?.accountId === session.accountId && widget.channelId === channelId) {
-          resolved = { id: pendingLaunch.widgetId, widget };
+      try {
+        const pendingLaunch = await deps.runtime.store.consumePendingLaunch(
+          session.accountId,
+          channelId,
+          session.discordUserId,
+        );
+        if (pendingLaunch) {
+          const widget = await deps.runtime.store.lookupWidget(pendingLaunch.widgetId);
+          if (widget?.accountId === session.accountId && widget.channelId === channelId) {
+            resolved = { id: pendingLaunch.widgetId, widget };
+          }
         }
+      } catch (error) {
+        logPendingLaunchFailure(error);
       }
       resolved ??= await deps.runtime.store.singleWidgetForChannel(session.accountId, channelId);
     }

@@ -36,6 +36,7 @@ async function startServer(
     now?: () => number;
     vendorAssetPath?: string;
     readVendorAsset?: (assetPath: string) => Promise<Buffer>;
+    logError?: (message: string) => void;
   } = {},
 ): Promise<string> {
   const route = createDiscordActivityHttpHandler({
@@ -482,6 +483,7 @@ describe("Discord Activity widget routes", () => {
     const requestedId = await createWidget(runtime, { createdAt: 1 });
     const pendingId = await createWidget(runtime, { createdAt: 2 });
     await runtime.store.recordPendingLaunch({
+      accountId: "default",
       channelId: "777",
       discordUserId: "42",
       widgetId: pendingId,
@@ -500,9 +502,9 @@ describe("Discord Activity widget routes", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ id: requestedId });
-    await expect(runtime.store.consumePendingLaunch("777", "42")).resolves.toMatchObject({
-      widgetId: pendingId,
-    });
+    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+      { widgetId: pendingId },
+    );
   });
 
   it.each(["", "ocactivity1_mangled"])(
@@ -512,6 +514,7 @@ describe("Discord Activity widget routes", () => {
       await createWidget(runtime, { createdAt: 1 });
       const pendingId = await createWidget(runtime, { createdAt: 2 });
       await runtime.store.recordPendingLaunch({
+        accountId: "default",
         channelId: "777",
         discordUserId: "42",
         widgetId: pendingId,
@@ -538,6 +541,7 @@ describe("Discord Activity widget routes", () => {
     const pendingId = await createWidget(runtime, { createdAt: 1 });
     await createWidget(runtime, { createdAt: 2 });
     await runtime.store.recordPendingLaunch({
+      accountId: "default",
       channelId: "777",
       discordUserId: "42",
       widgetId: pendingId,
@@ -556,6 +560,50 @@ describe("Discord Activity widget routes", () => {
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({ id: pendingId });
     expect(second.status).toBe(404);
+  });
+
+  it("keeps pending launches isolated by Discord account", async () => {
+    const runtime = createActivityTestRuntime();
+    await runtime.store.recordPendingLaunch({
+      accountId: "account-b",
+      channelId: "777",
+      discordUserId: "42",
+      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+      createdAt: 1,
+    });
+
+    await expect(
+      runtime.store.consumePendingLaunch("account-a", "777", "42"),
+    ).resolves.toBeUndefined();
+    await expect(
+      runtime.store.consumePendingLaunch("account-b", "777", "42"),
+    ).resolves.toMatchObject({ widgetId: "AAAAAAAAAAAAAAAAAAAAAA" });
+  });
+
+  it("keeps the single-widget fallback when pending launch lookup fails", async () => {
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime);
+    const session = await runtime.store.createSession({
+      discordUserId: "42",
+      accountId: "default",
+    });
+    const consumePendingLaunch = vi
+      .spyOn(runtime.store, "consumePendingLaunch")
+      .mockRejectedValue(new Error("store offline"));
+    const logError = vi.fn();
+    const base = await startServer(runtime, {
+      fetchGuard: guardedJsonFetch(),
+      logError,
+    });
+    const url = `${base}/discord/activity/api/widget?custom_id=missing&instance_id=instance-1`;
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${session}` } });
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({ id: widgetId });
+    }
+    expect(consumePendingLaunch).toHaveBeenCalledTimes(2);
+    expect(logError).toHaveBeenCalledOnce();
   });
 
   it("rejects a custom ID outside the validated instance channel", async () => {

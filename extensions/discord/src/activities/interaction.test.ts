@@ -4,6 +4,7 @@ import type { ButtonInteraction } from "../internal/discord.js";
 import { createInteraction } from "../internal/interactions.js";
 import {
   attachRestMock,
+  createDeferred,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
@@ -104,9 +105,52 @@ describe("Discord Activity interaction", () => {
     expect(authorize).toHaveBeenCalledOnce();
     expect(launchActivity).toHaveBeenCalledOnce();
     expect(reply).not.toHaveBeenCalled();
-    await expect(runtime.store.consumePendingLaunch("777", "42")).resolves.toMatchObject({
-      widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+    await expect(runtime.store.consumePendingLaunch("default", "777", "42")).resolves.toMatchObject(
+      { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+    );
+  });
+
+  it("does not delay the launch callback for a pending store write", async () => {
+    const runtime = createActivityTestRuntime();
+    setDiscordActivitiesRuntime(runtime);
+    const pendingWrite = createDeferred<void>();
+    const recordPendingLaunch = vi
+      .spyOn(runtime.store, "recordPendingLaunch")
+      .mockReturnValue(pendingWrite.promise);
+    const button = createDiscordActivityButton(componentContext(), "123456789012345678", {
+      authorize: vi.fn(async () => ({ commandAuthorized: true })) as never,
+      reply: vi.fn(async () => undefined) as never,
     });
+    if (!button) {
+      throw new Error("expected activity button");
+    }
+    const launchActivity = vi.fn(async () => undefined);
+    const interaction = {
+      launchActivity,
+      rawData: { channel_id: "777" },
+      userId: "42",
+    } as unknown as ButtonInteraction;
+    let runCompleted = false;
+    const run = button.run(interaction, { widgetId: "AAAAAAAAAAAAAAAAAAAAAA" }).then(() => {
+      runCompleted = true;
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(launchActivity).toHaveBeenCalledOnce();
+        expect(runCompleted).toBe(true);
+      });
+    } finally {
+      pendingWrite.resolve();
+    }
+    await run;
+    expect(recordPendingLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        channelId: "777",
+        discordUserId: "42",
+      }),
+    );
   });
 
   it("still launches when recording the pending launch fails and logs once", async () => {
@@ -133,7 +177,7 @@ describe("Discord Activity interaction", () => {
 
     expect(recordPendingLaunch).toHaveBeenCalledTimes(2);
     expect(launchActivity).toHaveBeenCalledTimes(2);
-    expect(logError).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(logError).toHaveBeenCalledOnce());
   });
 
   it("replies ephemerally and does not launch when unauthorized", async () => {
